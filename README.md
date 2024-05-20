@@ -16,5 +16,5 @@ Run the server:
 
 Run N clients:
 ```sh
-./client client 8000
+./client client 192.168.1.1 8000 # <client> <ip> <port> 
 ```
