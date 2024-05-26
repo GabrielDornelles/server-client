@@ -10,14 +10,16 @@
 #include <unistd.h>
 #include <pthread.h>
 
+
 #define NI_MAXHOST 1025
 #define NI_MAXSERV 32
 #define MAX_MESSAGE_LENGTH 1024
+#define MAX_MESSAGES 15
+
 
 const int SCREEN_WIDTH = 1280;
 const int SCREEN_HEIGHT = 720;
 
-#define MAX_MESSAGES 15
 
 typedef struct {
     char* text;
@@ -29,12 +31,16 @@ typedef struct {
 	int fd; //cfd
 } ClientData;
 
+typedef struct {
+    int fd;
+    int * message_counter;
+} TCPListener;
+
 SDL_Window* gWindow = NULL;
 SDL_Renderer* gRenderer = NULL;
 TTF_Font* gFont = NULL;
 SDL_Color white = {255, 255, 255, 255};
 Message messages[MAX_MESSAGES];
-int messageCount = 1;
 
 bool init() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -108,27 +114,27 @@ void renderText(SDL_Renderer* renderer, const char* text, TTF_Font* font, SDL_Co
 }
 
 void *server_message_handler(void *arg) {
-    // TODO: make messageCOunt a pointer maybe
-    int fd = *((int *)arg);
+    TCPListener *thread_args = (TCPListener *)arg;
+    int fd = thread_args->fd;
+    int * message_counter = thread_args->message_counter;
     free(arg);
+
     ssize_t bytes_received;
-    char received_message[1024];
+    char received_message[MAX_MESSAGE_LENGTH];
     
     while(1) {
-        memset(&received_message, 0, sizeof(received_message));
+      
         if ((bytes_received = recv(fd, received_message, sizeof(received_message) - 1, 0)) > 0) {
             received_message[bytes_received] = '\0';
             printf("%s\n", received_message);
 
-           
-            if (messageCount < MAX_MESSAGES) {
-                messages[messageCount].text = strdup(received_message); // Allocate and copy string
-                messages[messageCount].color = (SDL_Color){255, 255, 255, 255}; // Set color (white)
-                messageCount++;
+            if (*message_counter < MAX_MESSAGES) {
+                messages[*message_counter].text = strdup(received_message); // Allocate and copy string
+                messages[*message_counter].color = (SDL_Color){255, 255, 255, 255}; // Set color (white)
+                (*message_counter)++;
             }
         
         } else if (bytes_received == 0) {
-            // Connection closed by server
             printf("Server closed the connection\n");
             break;
         } else {
@@ -165,6 +171,7 @@ ClientData client(const char *server_ip, int port, int * message_counter) {
     }
 
     char name[50];
+    memset(name, 0, sizeof(name));
     printf("Please enter a username:\n");
 
     if (fgets(name, sizeof(name), stdin) == NULL) {
@@ -173,7 +180,8 @@ ClientData client(const char *server_ip, int port, int * message_counter) {
     }
     // Remove newline character from name
     name[strcspn(name, "\n")] = 0;
-    name[sizeof(name)] = '\0';
+    size_t len = strlen(name);
+    name[len] = '\0';
 
     if (send(fd, name, strlen(name), 0) == -1) {
         perror("send error:");
@@ -182,14 +190,19 @@ ClientData client(const char *server_ip, int port, int * message_counter) {
 
     printf("Entering server with username: %s\n", name);
 
-    // Create a thread to receive messages from the server
-    pthread_t tid;
-    int *fd_ptr = malloc(sizeof(int)); // I have no idea why sending &fd wasnt working, so just do it manually
+
+    TCPListener tcp_listener;
+    tcp_listener.fd = fd;
+    tcp_listener.message_counter = message_counter;
+
+    TCPListener *fd_ptr = malloc(sizeof(TCPListener));
     if (fd_ptr == NULL) {
         perror("malloc error:");
         exit(EXIT_FAILURE);
     }
-    *fd_ptr = fd;
+    *fd_ptr = tcp_listener;
+
+    pthread_t tid;
 
     if (pthread_create(&tid, NULL, server_message_handler, fd_ptr) != 0) {
         perror("pthread_create error:");
@@ -216,6 +229,8 @@ int main(int argc, char* argv[]) {
     }
 
     ClientData client_data;
+    int message_counter = 1;
+    
     if (argc > 1 && strcmp(argv[1], "client") == 0) {
         if (argc != 4) {
             fprintf(stderr, "Usage: %s client <server_ip> <port>\n", argv[0]);
@@ -226,7 +241,7 @@ int main(int argc, char* argv[]) {
         int port;
         sscanf(argv[3], "%d", &port);
 
-        client_data = client(server_ip, port, &messageCount);
+        client_data = client(server_ip, port, &message_counter);
     } else {
         fprintf(stderr, "Invalid arguments\n");
         return -1;
@@ -234,16 +249,16 @@ int main(int argc, char* argv[]) {
 
     bool quit = false;
     SDL_Event e;
-    int TypingyOffset = SCREEN_HEIGHT - 40;
-    int yOffset = 40;
+    int typing_offset = SCREEN_HEIGHT - 40;
+    int y_offset = 40;
 
     char message[MAX_MESSAGE_LENGTH];
     char formatted_message[MAX_MESSAGE_LENGTH + 50 + 3];
-    memset(&formatted_message, 0, sizeof(formatted_message));
     int message_len = 0;
 
     // Enable text input
     SDL_StartTextInput();
+    memset(messages, 0, sizeof(messages));
     messages[0].text = ">>> Starting the Group Chat";
     while (!quit) {
         // Handle events
@@ -259,16 +274,17 @@ int main(int argc, char* argv[]) {
                 }
             } else if (e.type == SDL_KEYDOWN) {
                 if (e.key.keysym.sym == SDLK_RETURN) {
-                    // Clear the message buffer when Enter is pressed
+                    // Send and clear the message buffer when Enter is pressed
                     message[strcspn(message, "\n")] = 0;
                     if (strlen(message) > 0) {
                         if (send(client_data.fd, message, strlen(message), 0) == -1) {
                             perror("send error:");
                             break;
                         }
-                        memset(message, 0, sizeof(message));
+                        
                         message_len = 0;
                     }
+                    memset(message, 0, sizeof(message));
                 } else if (e.key.keysym.sym == SDLK_BACKSPACE && message_len > 0) {
                     // Handle backspace
                     message[--message_len] = '\0';
@@ -277,17 +293,17 @@ int main(int argc, char* argv[]) {
         }
 
         // Render screen
-        yOffset = 10;
+        y_offset = 10;
         SDL_SetRenderDrawColor(gRenderer, 0, 0, 0, 255);
         SDL_RenderClear(gRenderer);
         
-        for (int i = 0; i < messageCount; ++i) {
-            renderText(gRenderer, messages[i].text, gFont, white, 10, yOffset);
-            yOffset += 30; // Adjust as necessary for spacing
+        for (int i = 0; i < message_counter; ++i) {
+            renderText(gRenderer, messages[i].text, gFont, white, 10, y_offset);
+            y_offset += 30; // Adjust as necessary for spacing
         }
 
         snprintf(formatted_message, sizeof(formatted_message), "(%s): %s", client_data.name, message);
-        renderText(gRenderer, formatted_message, gFont, white, 10, TypingyOffset);
+        renderText(gRenderer, formatted_message, gFont, white, 10, typing_offset);
 
         SDL_RenderPresent(gRenderer);
     }

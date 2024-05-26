@@ -64,7 +64,7 @@ void *client_handler(void *arg) {
     struct ThreadArgs *thread_args = (struct ThreadArgs *)arg;
     struct ClientData *client_data = thread_args->client_data;
     int cfd = thread_args->cfd;
-    int* num_of_connected_clients = thread_args->num_of_connected_clients;
+    int *num_of_connected_clients = thread_args->num_of_connected_clients;
     int client_array_id = thread_args->client_array_id;
 
     char message[1024];
@@ -72,9 +72,13 @@ void *client_handler(void *arg) {
 
     while ((bytes_received = recv(cfd, message, sizeof(message) - 1, 0)) > 0) {
         message[bytes_received] = '\0';
-        send_messages(message, client_data[client_array_id].name, client_data, num_of_connected_clients);
-        log_message(0, "Sent message: '%s' from %s\n", message, client_data[client_array_id].name);
+
+        if (bytes_received > 1){
+            send_messages(message, client_data[client_array_id].name, client_data, num_of_connected_clients);
+            log_message(0, "Sent message: '%s' from %s\n", message, client_data[client_array_id].name);
+        }
     }
+        
 
     if (bytes_received == -1) {
         perror("recv error:");
@@ -134,6 +138,7 @@ static int server() {
         log_message(0, "Got connection with fd: %d, waiting for username\n", client_fd);
 
         char client_name[50];
+        memset(client_name, 0, sizeof(client_name));
         ssize_t name_bytes_received = recv(client_fd, client_name, 50, 0);
         client_name[name_bytes_received] = '\0';
         log_message(0, "Received user with username: %s\n", client_name);
